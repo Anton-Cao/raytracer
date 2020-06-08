@@ -102,7 +102,7 @@ type material struct {
 // object that rays can interact with
 type object interface {
 	intersect(ray) (intersection point, intersects bool)
-	reflect(ray, point) (outgoing []ray, weights []float64, color color.Color)
+	reflect(ray, point, int) (outgoing []ray, weights []float64, color color.Color)
 }
 
 type ball struct {
@@ -133,7 +133,7 @@ func (b *ball) intersect(r ray) (point, bool) {
 	return r.scale(factor), true
 }
 
-func (b *ball) reflect(r ray, intersection point) ([]ray, []float64, color.Color) {
+func (b *ball) reflect(r ray, intersection point, depth int) ([]ray, []float64, color.Color) {
 	outgoing := make([]ray, 0)
 	weights := make([]float64, 0)
 	if !b.mat.luminous {
@@ -142,11 +142,8 @@ func (b *ball) reflect(r ray, intersection point) ([]ray, []float64, color.Color
 		outgoingRay := ray{src: intersection, dir: outgoingDir}
 		outgoing = append(outgoing, outgoingRay)
 		weights = append(weights, 1.0)
-		if b.mat.roughness > 0 {
+		if b.mat.roughness > 0 && depth == 0 { // only do roughness for initial beam to reduce time
 			// generate a random sphere of vectors around outgoingRay
-			if b.mat.roughness > 1 {
-				b.mat.roughness = 1
-			}
 			// find two vectors orthogonal to outgoing dir
 			var n1dir direction
 			var n2dirTemp direction
@@ -187,7 +184,7 @@ func (b *ball) reflect(r ray, intersection point) ([]ray, []float64, color.Color
 				n2dirTemp.dz - parallelComp*n1dir.dz,
 			}
 			n2dir.normalize()
-			for radius := 0.01; radius <= 5*b.mat.roughness; radius += 0.05 {
+			for radius := 0.01; radius <= b.mat.roughness; radius += 0.01 {
 				for angle := 0; angle < 360; angle += 5 {
 					radians := float64(angle) * (math.Pi / 180)
 					n1s := math.Cos(radians)
@@ -206,29 +203,6 @@ func (b *ball) reflect(r ray, intersection point) ([]ray, []float64, color.Color
 					weights = append(weights, (1.0 / 72))
 				}
 			}
-			// if math.Abs(dot(n2dir, outgoingDir)) > tolerance {
-			// 	fmt.Printf("%v*%v=%v not orthogonal!\n", n2dir, outgoingDir, dot(n2dir, outgoingDir))
-			// }
-			// if dot(n1dir, outgoingDir) > tolerance {
-			// 	fmt.Printf("%v*%v=%v not orthogonal!\n", n1dir, outgoingDir, dot(n1dir, outgoingDir))
-			// }
-			// if dot(n1dir, n2dir) > tolerance {
-			// 	fmt.Printf("%v*%v=%v not orthogonal!\n", n1dir, n2dir, dot(n1dir, n2dir))
-			// }
-			/*
-				samples := 2000
-				for i := 0; i < samples; i++ {
-					deflectionRadius2 := rand.Float64() / b.mat.roughness * norm2(outgoingDir)
-					randomDir := direction{
-						dx: rand.Float64(),
-						dy: rand.Float64(),
-						dz: rand.Float64(),
-					}
-					randomNorm2 := norm2(randomDir)
-					randomDir = randomDir.scale(deflectionRadius2 / randomNorm2)
-					outgoing = append(outgoing, outgoingRay.shiftBy(randomDir))
-				}
-			*/
 		}
 	}
 	return outgoing, weights, b.mat.color
@@ -239,7 +213,7 @@ type scene struct {
 	background color.Color
 }
 
-func (s *scene) getColor(r ray) color.Color {
+func (s *scene) getColor(r ray, depth int) color.Color {
 	minDist := -1.0
 	minI := -1
 	var ipnt point
@@ -255,7 +229,7 @@ func (s *scene) getColor(r ray) color.Color {
 	}
 	if minI != -1 {
 		collidesWith := s.objects[minI]
-		outgoing, weights, cc := collidesWith.reflect(r, ipnt)
+		outgoing, weights, cc := collidesWith.reflect(r, ipnt, depth)
 		if len(outgoing) == 0 { // luminous
 			return cc
 		}
@@ -268,7 +242,7 @@ func (s *scene) getColor(r ray) color.Color {
 			outgoingRay := outgoing[i]
 			weight := weights[i]
 			totalWeight += weight
-			nc := s.getColor(outgoingRay)
+			nc := s.getColor(outgoingRay, depth+1)
 			nr, ng, nb, na := nc.RGBA()
 			finalR += float64(nr) / float64(na) * float64(r) * weight
 			finalG += float64(ng) / float64(na) * float64(g) * weight
@@ -310,7 +284,7 @@ func (s *scene) render(output string) {
 						x := xMin + float64(c)*(xMax-xMin)/float64(width)
 						y := yMin + float64(r)*(yMax-yMin)/float64(height)
 						ray := getRay(origin, point{x, y, z})
-						color := s.getColor(ray)
+						color := s.getColor(ray, 0)
 						imgLock.Lock()
 						img.Set(c, r, color)
 						imgLock.Unlock()
@@ -330,17 +304,17 @@ func main() {
 	rand.Seed(42)
 	s := scene{
 		objects: []object{
-			// &ball{center: point{2, 2, 25}, radius: 1, mat: material{
-			// 	luminous:  false,
-			// 	color:     color.RGBA{255, 0, 0, 255},
-			// 	roughness: 0},
-			// },
-			&ball{center: point{-10, 0, 50}, radius: 1, mat: material{
+			&ball{center: point{-5, 5, 50}, radius: 1, mat: material{
+				luminous:  false,
+				color:     color.RGBA{255, 0, 0, 255},
+				roughness: 0.8},
+			},
+			&ball{center: point{-10, 0, 50}, radius: 4, mat: material{
 				luminous:  false,
 				color:     color.RGBA{0, 255, 0, 255},
-				roughness: 1},
+				roughness: 2},
 			},
-			&ball{center: point{30, 0, 40}, radius: 30, mat: material{
+			&ball{center: point{10, 0, 40}, radius: 8, mat: material{
 				luminous:  true,
 				color:     color.RGBA{255, 255, 255, 255},
 				roughness: 0},
